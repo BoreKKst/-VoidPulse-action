@@ -13,6 +13,8 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 
 import java.io.File;
 import java.io.IOException;
@@ -25,17 +27,15 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
 
     @Override
     public void onEnable() {
-        // Создаем папку плагина, если её нет
         if (!getDataFolder().exists()) {
             getDataFolder().mkdir();
         }
 
-        // Регистрируем события и команды
         getServer().getPluginManager().registerEvents(this, this);
-        getCommand("register").setExecutor(this);
-        getCommand("login").setExecutor(this);
+        if (getCommand("register") != null) getCommand("register").setExecutor(this);
+        if (getCommand("login") != null) getCommand("login").setExecutor(this);
 
-        getLogger().info("VoidPulse Auth успешно запущен!");
+        getLogger().info("VoidPulse Auth со слепотой успешно запущен!");
     }
 
     @Override
@@ -49,6 +49,9 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
         Player player = event.getPlayer();
         File playerFile = new File(getDataFolder(), player.getName() + ".yml");
         
+        // Выдаем эффект слепоты надолго (длительность 99999 секунд, уровень 1, без частиц)
+        player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 99999, 0, false, false));
+
         if (!playerFile.exists()) {
             player.sendMessage(ChatColor.RED + "Пожалуйста, зарегистрируйся! Напиши: /register <пароль>");
         } else {
@@ -64,11 +67,10 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
-        // Если игрок не вошел в систему, запрещаем ему двигаться
         if (!loggedIn.contains(player)) {
             Location from = event.getFrom();
-            Location to = event.To();
-            if (from.getX() != to.getX() || from.getZ() != to.getZ()) {
+            Location to = event.getTo();
+            if (to != null && (from.getX() != to.getX() || from.getZ() != to.getZ())) {
                 player.teleport(from);
                 player.sendMessage(ChatColor.RED + "Сначала авторизуйся! Используй /login или /register");
             }
@@ -98,6 +100,8 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
             try {
                 playerFile.createNewFile();
                 loggedIn.add(player);
+                // Убираем слепоту после успешной регистрации
+                player.removePotionEffect(PotionEffectType.BLINDNESS);
                 player.sendMessage(ChatColor.GREEN + "Регистрация успешна! Добро пожаловать на VoidPulse.");
             } catch (IOException e) {
                 player.sendMessage(ChatColor.RED + "Ошибка при регистрации файла игрока!");
@@ -119,8 +123,9 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
                 return true;
             }
 
-            // Простая проверка (в полноценной версии можно сверять с хэшем в файле)
             loggedIn.add(player);
+            // Убираем слепоту после успешного логина
+            player.removePotionEffect(PotionEffectType.BLINDNESS);
             player.sendMessage(ChatColor.GREEN + "Успешный вход! Приятной игры.");
             return true;
         }
