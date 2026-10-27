@@ -22,11 +22,10 @@ jobs:
         cache: 'maven'
 
     - name: Build with Maven
-      working-directory: шестерни  # Укажи точное название папки, где лежит твой pom.xml
       run: mvn clean package
 
     - name: Upload artifact (.jar file)
       uses: actions/upload-artifact@v4
       with:
         name: VoidPulse-Plugin
-        path: "**/target/*.jar"
+        path: target/*.jar
