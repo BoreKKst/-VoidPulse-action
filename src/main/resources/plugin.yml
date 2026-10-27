@@ -6,6 +6,12 @@ commands:
   register:
     description: Регистрация аккаунта
     usage: /register <пароль>
+  reg:
+    description: Регистрация аккаунта
+    usage: /reg <пароль>
   login:
     description: Вход в аккаунт
     usage: /login <пароль>
+  l:
+    description: Вход в аккаунт
+    usage: /l <пароль>
