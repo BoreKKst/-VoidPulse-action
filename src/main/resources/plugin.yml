@@ -2,3 +2,10 @@ name: VoidPulsePlugin
 version: 1.0
 main: com.voidpulse.plugin.Main
 api-version: '1.21'
+commands:
+  register:
+    description: Регистрация аккаунта
+    usage: /register <пароль>
+  login:
+    description: Вход в аккаунт
+    usage: /login <пароль>
