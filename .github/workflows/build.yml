@@ -22,7 +22,7 @@ jobs:
         cache: 'maven'
 
     - name: Build with Maven
-      working-directory: ./  # Если файлы в папке проекта, укажи её имя, например: VoidPulse
+      working-directory: шестерни  # Укажи точное название папки, где лежит твой pom.xml
       run: mvn clean package
 
     - name: Upload artifact (.jar file)
