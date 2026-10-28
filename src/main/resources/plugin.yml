@@ -1,14 +1,11 @@
 name: VoidPulsePlugin
 version: 1.0
 main: com.voidpulse.VoidPulsePlugin
-api-version: '1.21'
+api-version: 1.21
 commands:
   reg:
-    description: Регистрация аккаунта
-    usage: /reg <пароль>
   login:
-    description: Вход в аккаунт
-    usage: /login <пароль>
   l:
-    description: Вход в аккаунт (алиас)
-    usage: /l <пароль>
+  setspawn:
+    description: Установить временный спаун для авторизации
+    permission: voidpulse.admin
