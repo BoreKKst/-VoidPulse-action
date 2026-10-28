@@ -2,6 +2,7 @@ package com.voidpulse;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -38,7 +39,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         }
 
         getServer().getPluginManager().registerEvents(this, this);
-        getLogger().info("§a[VoidPulse] Автономный плагин авторизации с капчей успешно запущен!");
+        getLogger().info("§a[VoidPulse] Автономный плагин авторизации с капчей и системой спавнов успешно запущен!");
     }
 
     @Override
@@ -55,6 +56,22 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
         unauthenticatedPlayers.add(uuid);
         player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 999999, 1, false, false));
+
+        // Телепортируем на временный спаун авторизации, если он настроен
+        if (getConfig().contains("auth-spawn.world")) {
+            String worldName = getConfig().getString("auth-spawn.world");
+            if (Bukkit.getWorld(worldName) != null) {
+                Location authSpawn = new Location(
+                        Bukkit.getWorld(worldName),
+                        getConfig().getDouble("auth-spawn.x"),
+                        getConfig().getDouble("auth-spawn.y"),
+                        getConfig().getDouble("auth-spawn.z"),
+                        (float) getConfig().getDouble("auth-spawn.yaw"),
+                        (float) getConfig().getDouble("auth-spawn.pitch")
+                );
+                player.teleport(authSpawn);
+            }
+        }
 
         // Генерируем код капчи
         String captchaCode = generateRandomCode();
@@ -79,7 +96,17 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        UUID uuid = event.getPlayer().getUniqueId();
+        Player player = event.getPlayer();
+        UUID uuid = player.getUniqueId();
+        
+        // Если игрок уже был авторизован при выходе, сохраняем его текущую позицию
+        if (!unauthenticatedPlayers.contains(uuid)) {
+            File accountFile = new File(getDataFolder(), "accounts/" + player.getName().toLowerCase() + ".yml");
+            if (accountFile.exists()) {
+                savePlayerLocation(player, accountFile);
+            }
+        }
+
         unauthenticatedPlayers.remove(uuid);
         pendingCaptcha.remove(uuid);
     }
@@ -138,14 +165,15 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         if (unauthenticatedPlayers.contains(player.getUniqueId())) {
             String msg = event.getMessage().toLowerCase();
-            if (!msg.startsWith("/reg") && !msg.startsWith("/login") && !msg.startsWith("/l ")) {
+            // Разрешаем также админскую команду установки спавна
+            if (!msg.startsWith("/reg") && !msg.startsWith("/login") && !msg.startsWith("/l ") && !msg.startsWith("/voidpulse:setspawn") && !msg.startsWith("/setspawn")) {
                 event.setCancelled(true);
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала пройдите капчу и авторизуйтесь!"));
             }
         }
     }
 
-    // --- КОМАНДЫ РЕГИСТРАЦИИ И ВХОДА ---
+    // --- КОМАНДЫ (setspawn, reg, login) ---
 
     @Override
     public boolean onCommand(org.bukkit.command.CommandSender sender, org.bukkit.command.Command command, String label, String[] args) {
@@ -154,6 +182,26 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         UUID uuid = player.getUniqueId();
         String name = player.getName().toLowerCase();
         File accountFile = new File(getDataFolder(), "accounts/" + name + ".yml");
+
+        // Команда установки временного спавна для авторизации: /voidpulse:setspawn или /setspawn
+        if (command.getName().equalsIgnoreCase("setspawn") || label.equalsIgnoreCase("voidpulse:setspawn")) {
+            if (!player.hasPermission("voidpulse.admin") && !player.isOp()) {
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cУ вас нет прав на выполнение этой команды!"));
+                return true;
+            }
+
+            Location loc = player.getLocation();
+            getConfig().set("auth-spawn.world", loc.getWorld().getName());
+            getConfig().set("auth-spawn.x", loc.getX());
+            getConfig().set("auth-spawn.y", loc.getY());
+            getConfig().set("auth-spawn.z", loc.getZ());
+            getConfig().set("auth-spawn.yaw", loc.getYaw());
+            getConfig().set("auth-spawn.pitch", loc.getPitch());
+            saveConfig();
+
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a✅ Временный спаун для авторизации успешно установлен здесь!"));
+            return true;
+        }
 
         if (pendingCaptcha.containsKey(uuid)) {
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала введите код с карты в чат!"));
@@ -185,7 +233,10 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             }
 
             authenticatePlayer(player);
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🎉 Успешная регистрация и вход!"));
+            
+            // Новая регистрация -> телепортируем на основной спаун мира
+            player.teleport(player.getWorld().getSpawnLocation());
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🎉 Успешная регистрация! Добро пожаловать на сервер!"));
             return true;
         }
 
@@ -208,7 +259,12 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
             if (hashPassword(args[0]).equals(savedHash)) {
                 authenticatePlayer(player);
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🔓 Успешный вход в игру!"));
+                
+                // Вход существующего игрока -> телепортируем туда, где он вышел последний раз
+                Location lastLoc = getPlayerLocation(player, accountFile);
+                player.teleport(lastLoc);
+                
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🔓 Успешный вход в игру! Вы возвращены на место выхода."));
             } else {
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&c❌ Неверный пароль!"));
             }
@@ -220,8 +276,41 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
     private void authenticatePlayer(Player player) {
         unauthenticatedPlayers.remove(player.getUniqueId());
-        // Гарантированно снимаем эффект слепоты и возвращаем нормальное зрение
         player.removePotionEffect(PotionEffectType.BLINDNESS);
+    }
+
+    private void savePlayerLocation(Player player, File accountFile) {
+        FileConfiguration config = YamlConfiguration.loadConfiguration(accountFile);
+        Location loc = player.getLocation();
+        config.set("last-location.world", loc.getWorld().getName());
+        config.set("last-location.x", loc.getX());
+        config.set("last-location.y", loc.getY());
+        config.set("last-location.z", loc.getZ());
+        config.set("last-location.yaw", loc.getYaw());
+        config.set("last-location.pitch", loc.getPitch());
+        try {
+            config.save(accountFile);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private Location getPlayerLocation(Player player, File accountFile) {
+        FileConfiguration config = YamlConfiguration.loadConfiguration(accountFile);
+        if (config.contains("last-location.world")) {
+            String worldName = config.getString("last-location.world");
+            if (Bukkit.getWorld(worldName) != null) {
+                return new Location(
+                        Bukkit.getWorld(worldName),
+                        config.getDouble("last-location.x"),
+                        config.getDouble("last-location.y"),
+                        config.getDouble("last-location.z"),
+                        (float) config.getDouble("last-location.yaw"),
+                        (float) config.getDouble("last-location.pitch")
+                );
+            }
+        }
+        return player.getWorld().getSpawnLocation();
     }
 
     private String generateRandomCode() {
