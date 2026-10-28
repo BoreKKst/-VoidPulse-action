@@ -5,7 +5,7 @@
 
     <groupId>com.voidpulse</groupId>
     <artifactId>VoidPulsePlugin</artifactId>
-    <version>1.0</version>
+    <version>1.0-${git.commit.id.abbrev}</version>
     <packaging>jar</packaging>
 
     <name>VoidPulsePlugin</name>
@@ -40,6 +40,24 @@
                 <configuration>
                     <source>${java.version}</source>
                     <target>${java.version}</target>
+                </configuration>
+            </plugin>
+            <!-- Плагин для авто-версионирования через Git -->
+            <plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>7.0.0</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>revision</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <dotGitDirectory>${project.basedir}/.git</dotGitDirectory>
+                    <prefix>git</prefix>
+                    <abbrevLength>7</abbrevLength>
                 </configuration>
             </plugin>
         </plugins>
