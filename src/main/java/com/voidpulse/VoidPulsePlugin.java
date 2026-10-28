@@ -163,7 +163,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
     @Override
     public boolean onCommand(org.bukkit.command.CommandSender sender, org.bukkit.command.Command command, String label, String[] args) {
         if (!(sender instanceof Player)) return true;
-        Player player = (Player) sender; // <--- Вот здесь было исправлено!
+        Player player = (Player) sender;
         String name = player.getName().toLowerCase();
         File accountFile = new File(getDataFolder(), "accounts/" + name + ".yml");
 
