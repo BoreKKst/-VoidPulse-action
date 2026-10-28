@@ -202,7 +202,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
         if (command.getName().equalsIgnoreCase("login") || command.getName().equalsIgnoreCase("l")) {
             if (!unauthenticatedPlayers.contains(player.getUniqueId())) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cВы уже вошли!")));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cВы уже вошли!"));
                 return true;
             }
             if (!accountFile.exists()) {
