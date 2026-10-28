@@ -14,11 +14,6 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.MapMeta;
-import org.bukkit.map.MapCanvas;
-import org.bukkit.map.MapRenderer;
-import org.bukkit.map.MapView;
-import org.bukkit.map.MinecraftFont;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
@@ -26,6 +21,9 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -51,7 +49,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         }
 
         getServer().getPluginManager().registerEvents(this, this);
-        getLogger().info("§a[VoidPulse] Автономный плагин капчи и защиты успешно запущен!");
+        getLogger().info("§a[VoidPulse] Автономный плагин авторизации успешно запущен!");
     }
 
     @Override
@@ -71,8 +69,6 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         UUID uuid = player.getUniqueId();
 
         unauthenticatedPlayers.add(uuid);
-
-        // Возвращаем эффект слепоты
         player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 999999, 1, false, false));
 
         // Сохраняем инвентарь и очищаем (защита от дюпа)
@@ -80,7 +76,6 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         savedArmor.put(uuid, player.getInventory().getArmorContents());
         player.getInventory().clear();
 
-        // Телепортируем на временный спаун авторизации, если он настроен
         if (getConfig().contains("auth-spawn.world")) {
             String worldName = getConfig().getString("auth-spawn.world");
             if (Bukkit.getWorld(worldName) != null) {
@@ -96,47 +91,28 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             }
         }
 
-        // Генерируем код капчи и выдаем карту
         String captchaCode = generateRandomCode();
         pendingCaptcha.put(uuid, captchaCode);
 
-        ItemStack mapItem = new ItemStack(Material.FILLED_MAP);
-        MapMeta meta = (MapMeta) mapItem.getItemMeta();
-        if (meta != null) {
-            MapView mapView = Bukkit.createMap(player.getWorld());
-            mapView.getRenderers().clear();
-            mapView.addRenderer(new MapRenderer() {
-                @Override
-                public void render(MapView map, MapCanvas canvas, Player p) {
-                    canvas.drawText(15, 40, MinecraftFont.Font, "VOIDPULSE");
-                    canvas.drawText(15, 60, MinecraftFont.Font, "CAPTCHA CODE:");
-                    canvas.drawText(25, 80, MinecraftFont.Font, "-> " + captchaCode + " <-");
-                }
-            });
-            meta.setMapView(mapView);
-            meta.setDisplayName(ChatColor.translateAlternateColorCodes('&', "&b&lКАРТА КАПЧИ"));
-            mapItem.setItemMeta(meta);
-        }
+        player.sendTitle(
+                ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages.title-main", "&b&lКАПЧА НА ЭКРАНЕ")),
+                ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages.title-sub", "&7Код: &e&l" + captchaCode)),
+                10, 99999, 20
+        );
 
-        player.getInventory().setItemInMainHand(mapItem);
         player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                "&c[VoidPulse] Введите код с карты в чат для авторизации!"));
+                getConfig().getString("messages.join-chat", "&c[VoidPulse] Введите код с экрана в чат!")));
 
-        // Таймер предупреждения на 10 секунд
-        Bukkit.getScheduler().runTaskLater(this, () -> {
-            if (unauthenticatedPlayers.contains(uuid)) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                        "&c[VoidPulse] Осталось 10 секунд на авторизацию, иначе вещи будут возвращены, а вы кикнуты!"));
-            }
-        }, 20L * 50);
+        // Лог в Discord о входе игрока
+        sendDiscordLog("JOIN", player.getName(), "Игрок зашел на сервер, ожидает ввода капчи.");
 
-        // Таймер таймаута на 60 секунд
+        // Таймер на 60 секунд
         BukkitTask timeoutTask = Bukkit.getScheduler().runTaskLater(this, () -> {
             if (unauthenticatedPlayers.contains(uuid)) {
                 restoreInventory(player);
                 unauthenticatedPlayers.remove(uuid);
                 pendingCaptcha.remove(uuid);
-                player.kickPlayer(ChatColor.translateAlternateColorCodes('&', "&c[VoidPulse] Время истекло! Вещи возвращены."));
+                player.kickPlayer(ChatColor.translateAlternateColorCodes('&', "&c[VoidPulse] Время на авторизацию истекло! Вещи возвращены."));
             }
         }, 20L * 60);
         
@@ -168,14 +144,12 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         savedArmor.remove(uuid);
     }
 
-    // --- ЗАЩИТА И СВОБОДНЫЙ ОБЗОР КАМЕРОЙ ---
-
+    // Свободный обзор камерой (Yaw/Pitch), но запрет перемещения по координатам
     @EventHandler
     public void onPlayerMove(PlayerMoveEvent event) {
         if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
             Location from = event.getFrom();
             Location to = event.getTo();
-            // Блокируем только перемещение по координатам X, Y, Z, но разрешаем крутить камеру (Yaw, Pitch)
             if (from.getX() != to.getX() || from.getY() != to.getY() || from.getZ() != to.getZ()) {
                 Location locked = from.clone();
                 locked.setYaw(to.getYaw());
@@ -238,20 +212,20 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
                     pendingCaptcha.remove(uuid);
                     
                     Bukkit.getScheduler().runTask(this, () -> {
-                        player.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
+                        player.sendTitle("", "", 0, 0, 0);
                         File accountFile = new File(getDataFolder(), "accounts/" + player.getName().toLowerCase() + ".yml");
                         
                         if (accountFile.exists()) {
                             player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                                    "&a✅ Капча пройдена! Введите &e/login <пароль>"));
+                                    getConfig().getString("messages.captcha-success-login", "&a✅ Капча пройдена! Введите /login <пароль>")));
                         } else {
                             player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                                    "&a✅ Капча пройдена! Введите &e/reg <пароль>"));
+                                    getConfig().getString("messages.captcha-success-reg", "&a✅ Капча пройдена! Введите /reg <пароль>")));
                         }
                     });
                 } else {
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                            "&c❌ Неверный код капчи! Посмотрите на карту в руке."));
+                            getConfig().getString("messages.captcha-wrong", "&c❌ Неверный код капчи!")));
                 }
                 return;
             }
@@ -265,7 +239,9 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         if (unauthenticatedPlayers.contains(player.getUniqueId())) {
             String msg = event.getMessage().toLowerCase();
-            if (!msg.startsWith("/reg") && !msg.startsWith("/login") && !msg.startsWith("/l ") && !msg.startsWith("/voidpulse:setspawn") && !msg.startsWith("/setspawn")) {
+            if (!msg.startsWith("/reg") && !msg.startsWith("/login") && !msg.startsWith("/l ") 
+                    && !msg.startsWith("/voidpulse:setspawn") && !msg.startsWith("/setspawn")
+                    && !msg.startsWith("/voidpulseauth") && !msg.startsWith("/vpa")) {
                 event.setCancelled(true);
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала пройдите капчу и авторизуйтесь!"));
             }
@@ -274,6 +250,21 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
     @Override
     public boolean onCommand(org.bukkit.command.CommandSender sender, org.bukkit.command.Command command, String label, String[] args) {
+        // Обработка команд перезагрузки конфига: /voidpulseauth reload или /vpa reload
+        if (command.getName().equalsIgnoreCase("voidpulseauth") || label.equalsIgnoreCase("vpa")) {
+            if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
+                if (!sender.hasPermission("voidpulse.admin") && !sender.isOp()) {
+                    sender.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cУ вас нет прав!"));
+                    return true;
+                }
+                reloadConfig();
+                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a✅ Конфигурация VoidPulse успешно перезагружена!"));
+                return true;
+            }
+            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cИспользование: /voidpulseauth reload"));
+            return true;
+        }
+
         if (!(sender instanceof Player)) return true;
         Player player = (Player) sender;
         UUID uuid = player.getUniqueId();
@@ -300,7 +291,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         }
 
         if (pendingCaptcha.containsKey(uuid)) {
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала введите код с карты в чат!"));
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала введите код с экрана в чат!"));
             return true;
         }
 
@@ -331,6 +322,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             completeAuthentication(player);
             player.teleport(player.getWorld().getSpawnLocation());
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🎉 Успешная регистрация! Вещи возвращены."));
+            sendDiscordLog("REGISTER", player.getName(), "Игрок успешно зарегистрировался.");
             return true;
         }
 
@@ -356,6 +348,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
                 Location lastLoc = getPlayerLocation(player, accountFile);
                 player.teleport(lastLoc);
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🔓 Успешный вход! Вещи возвращены."));
+                sendDiscordLog("LOGIN", player.getName(), "Игрок успешно вошел в аккаунт.");
             } else {
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&c❌ Неверный пароль!"));
             }
@@ -373,12 +366,14 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         }
         unauthenticatedPlayers.remove(uuid);
         pendingCaptcha.remove(uuid);
+        player.sendTitle("", "", 0, 0, 0);
         player.removePotionEffect(PotionEffectType.BLINDNESS);
         restoreInventory(player);
     }
 
     private void restoreInventory(Player player) {
         UUID uuid = player.getUniqueId();
+        player.sendTitle("", "", 0, 0, 0);
         player.removePotionEffect(PotionEffectType.BLINDNESS);
         if (savedInventories.containsKey(uuid)) {
             player.getInventory().setContents(savedInventories.get(uuid));
@@ -388,6 +383,31 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             player.getInventory().setArmorContents(savedArmor.get(uuid));
             savedArmor.remove(uuid);
         }
+    }
+
+    private void sendDiscordLog(String eventType, String playerName, String details) {
+        String apiUrl = getConfig().getString("bot-api-url", "");
+        if (apiUrl == null || apiUrl.isEmpty()) return;
+        
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            try {
+                URL url = new URL(apiUrl);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json; utf-8");
+                conn.setRequestProperty("Accept", "application/json");
+                conn.setDoOutput(true);
+                
+                String json = String.format("{\"secret_key\": \"%s\", \"event\": \"%s\", \"player\": \"%s\", \"details\": \"%s\"}",
+                        getConfig().getString("secret-key", "VP_SECURE_KEY_7749_BETA_SECURE"), eventType, playerName, details);
+                        
+                try(OutputStream os = conn.getOutputStream()) {
+                    byte[] input = json.getBytes(StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+                conn.getResponseCode();
+            } catch (Exception ignored) {}
+        });
     }
 
     private void savePlayerLocation(Player player, File accountFile) {
