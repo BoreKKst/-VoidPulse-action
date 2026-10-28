@@ -20,6 +20,8 @@ import org.bukkit.map.MapRenderer;
 import org.bukkit.map.MapView;
 import org.bukkit.map.MinecraftFont;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.io.File;
@@ -35,7 +37,6 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
     private final Map<UUID, String> pendingCaptcha = new ConcurrentHashMap<>();
     private final Set<UUID> unauthenticatedPlayers = ConcurrentHashMap.newKeySet();
     
-    // Безопасное хранилище инвентарей на время авторизации (защита от дюпов и потери вещей)
     private final ConcurrentHashMap<UUID, ItemStack[]> savedInventories = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, ItemStack[]> savedArmor = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, BukkitTask> authTimeouts = new ConcurrentHashMap<>();
@@ -50,12 +51,11 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         }
 
         getServer().getPluginManager().registerEvents(this, this);
-        getLogger().info("§a[VoidPulse] Автономный плагин капчи и защиты от дюпа успешно запущен!");
+        getLogger().info("§a[VoidPulse] Автономный плагин капчи и защиты успешно запущен!");
     }
 
     @Override
     public void onDisable() {
-        // Возвращаем вещи всем, кто остался в памяти при выключении плагина
         for (UUID uuid : unauthenticatedPlayers) {
             Player p = Bukkit.getPlayer(uuid);
             if (p != null) {
@@ -72,12 +72,15 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
         unauthenticatedPlayers.add(uuid);
 
-        // 1. Сохраняем инвентарь и броню в память, затем очищаем игрока (защита от дюпа)
+        // Возвращаем эффект слепоты
+        player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 999999, 1, false, false));
+
+        // Сохраняем инвентарь и очищаем (защита от дюпа)
         savedInventories.put(uuid, player.getInventory().getContents());
         savedArmor.put(uuid, player.getInventory().getArmorContents());
         player.getInventory().clear();
 
-        // 2. Телепортируем на временный спаун авторизации, если он настроен
+        // Телепортируем на временный спаун авторизации, если он настроен
         if (getConfig().contains("auth-spawn.world")) {
             String worldName = getConfig().getString("auth-spawn.world");
             if (Bukkit.getWorld(worldName) != null) {
@@ -93,7 +96,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             }
         }
 
-        // 3. Генерируем код капчи и выдаем карту
+        // Генерируем код капчи и выдаем карту
         String captchaCode = generateRandomCode();
         pendingCaptcha.put(uuid, captchaCode);
 
@@ -117,23 +120,23 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
         player.getInventory().setItemInMainHand(mapItem);
         player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                "&c[VoidPulse] Внимание! Ваши вещи временно защищены в хранилище. Посмотрите на карту в руке и введите код в чат!"));
+                "&c[VoidPulse] Введите код с карты в чат для авторизации!"));
 
-        // 4. Таймер предупреждения на 10 секунд (через 50 секунд)
+        // Таймер предупреждения на 10 секунд
         Bukkit.getScheduler().runTaskLater(this, () -> {
             if (unauthenticatedPlayers.contains(uuid)) {
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                        "&c[VoidPulse] Внимание! Осталось 10 секунд на авторизацию, иначе вы будете кикнуты, а вещи возвращены!"));
+                        "&c[VoidPulse] Осталось 10 секунд на авторизацию, иначе вещи будут возвращены, а вы кикнуты!"));
             }
         }, 20L * 50);
 
-        // 5. Таймер полного таймаута на 60 секунд (возврат вещей и кик)
+        // Таймер таймаута на 60 секунд
         BukkitTask timeoutTask = Bukkit.getScheduler().runTaskLater(this, () -> {
             if (unauthenticatedPlayers.contains(uuid)) {
                 restoreInventory(player);
                 unauthenticatedPlayers.remove(uuid);
                 pendingCaptcha.remove(uuid);
-                player.kickPlayer(ChatColor.translateAlternateColorCodes('&', "&c[VoidPulse] Время на авторизацию истекло! Ваши вещи возвращены."));
+                player.kickPlayer(ChatColor.translateAlternateColorCodes('&', "&c[VoidPulse] Время истекло! Вещи возвращены."));
             }
         }, 20L * 60);
         
@@ -145,13 +148,11 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
         
-        // Отменяем таймер кика
         if (authTimeouts.containsKey(uuid)) {
             authTimeouts.get(uuid).cancel();
             authTimeouts.remove(uuid);
         }
 
-        // Если вышел неавторизованным — сразу возвращаем вещи в инвентарь на случай повторного входа
         if (unauthenticatedPlayers.contains(uuid)) {
             restoreInventory(player);
             unauthenticatedPlayers.remove(uuid);
@@ -167,13 +168,27 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         savedArmor.remove(uuid);
     }
 
-    // --- ЗАЩИТА ОТ ДЕЙСТВИЙ ДО АВТОРИЗАЦИИ ---
+    // --- ЗАЩИТА И СВОБОДНЫЙ ОБЗОР КАМЕРОЙ ---
+
+    @EventHandler
+    public void onPlayerMove(PlayerMoveEvent event) {
+        if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
+            Location from = event.getFrom();
+            Location to = event.getTo();
+            // Блокируем только перемещение по координатам X, Y, Z, но разрешаем крутить камеру (Yaw, Pitch)
+            if (from.getX() != to.getX() || from.getY() != to.getY() || from.getZ() != to.getZ()) {
+                Location locked = from.clone();
+                locked.setYaw(to.getYaw());
+                locked.setPitch(to.getPitch());
+                event.setTo(locked);
+            }
+        }
+    }
 
     @EventHandler
     public void onBlockBreak(BlockBreakEvent event) {
         if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
             event.setCancelled(true);
-            event.getPlayer().sendMessage(ChatColor.translateAlternateColorCodes('&', "&cНельзя ломать блоки до авторизации!"));
         }
     }
 
@@ -181,7 +196,6 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
     public void onBlockPlace(BlockPlaceEvent event) {
         if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
             event.setCancelled(true);
-            event.getPlayer().sendMessage(ChatColor.translateAlternateColorCodes('&', "&cНельзя ставить блоки до авторизации!"));
         }
     }
 
@@ -189,7 +203,6 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
     public void onDropItem(PlayerDropItemEvent event) {
         if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
             event.setCancelled(true);
-            event.getPlayer().sendMessage(ChatColor.translateAlternateColorCodes('&', "&cНельзя выбрасывать предметы до авторизации!"));
         }
     }
 
@@ -225,7 +238,6 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
                     pendingCaptcha.remove(uuid);
                     
                     Bukkit.getScheduler().runTask(this, () -> {
-                        // Очищаем карту из руки
                         player.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
                         File accountFile = new File(getDataFolder(), "accounts/" + player.getName().toLowerCase() + ".yml");
                         
@@ -245,15 +257,6 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             }
 
             player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала авторизуйтесь через /login или /reg!"));
-        }
-    }
-
-    @EventHandler
-    public void onPlayerMove(PlayerMoveEvent event) {
-        if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
-            if (event.getFrom().getX() != event.getTo().getX() || event.getFrom().getZ() != event.getTo().getZ()) {
-                event.setTo(event.getFrom());
-            }
         }
     }
 
@@ -292,7 +295,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             getConfig().set("auth-spawn.pitch", loc.getPitch());
             saveConfig();
 
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a✅ Спаун авторизации успешно установлен здесь!"));
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a✅ Спаун авторизации успешно установлен!"));
             return true;
         }
 
@@ -325,10 +328,9 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
                 e.printStackTrace();
             }
 
-            // Успешная регистрация: завершаем сессию авторизации, возвращаем вещи и телепортируем на спаун
             completeAuthentication(player);
             player.teleport(player.getWorld().getSpawnLocation());
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🎉 Успешная регистрация и вход! Ваши вещи возвращены."));
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🎉 Успешная регистрация! Вещи возвращены."));
             return true;
         }
 
@@ -350,11 +352,10 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             String savedHash = accConfig.getString("password", "");
 
             if (hashPassword(args[0]).equals(savedHash)) {
-                // Успешный вход: завершаем сессию, возвращаем вещи и отправляем на точку выхода
                 completeAuthentication(player);
                 Location lastLoc = getPlayerLocation(player, accountFile);
                 player.teleport(lastLoc);
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🔓 Успешный вход! Ваши вещи возвращены, вы на месте выхода."));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🔓 Успешный вход! Вещи возвращены."));
             } else {
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&c❌ Неверный пароль!"));
             }
@@ -372,11 +373,13 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         }
         unauthenticatedPlayers.remove(uuid);
         pendingCaptcha.remove(uuid);
-        restoreInventory(player); // Возвращаем инвентарь игроку в целости и сохранности
+        player.removePotionEffect(PotionEffectType.BLINDNESS);
+        restoreInventory(player);
     }
 
     private void restoreInventory(Player player) {
         UUID uuid = player.getUniqueId();
+        player.removePotionEffect(PotionEffectType.BLINDNESS);
         if (savedInventories.containsKey(uuid)) {
             player.getInventory().setContents(savedInventories.get(uuid));
             savedInventories.remove(uuid);
