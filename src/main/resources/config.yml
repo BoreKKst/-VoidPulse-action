@@ -1,0 +1,22 @@
+# Настройки связи с Discord-ботом на Render
+discord:
+  api-url: "https://твой-бот.onrender.com"
+  secret-key: "VP_SECURE_KEY_7749_BETA_SECURE"
+  invite-link: "discord.gg/voidpulse"
+
+# Настройки безопасности в игре
+settings:
+  # Время жизни сессии кода в секундах (должно совпадать с ботом - 5 минут)
+  code-expires: 300
+
+# Сообщения (можно кастомизировать под себя)
+messages:
+  kick-verification: "§c[VoidPulse] Требуется верификация в Discord!\n\n§71. Зайди на: §b{invite}\n§72. Твой код: §e{code}\n\n§cОтправь этот код в канал верификации!"
+  not-verified-chat: "§cТы еще не подтвердил аккаунт в Discord!"
+  not-logged-in: "§c[Auth] Авторизуйся! Используй §e/login <пароль> §циони §e/reg <пароль>"
+  register-success: "§a[Auth] Регистрация успешна! Добро пожаловать на VoidPulse."
+  login-success: "§а[Auth] Вы успешно вошли в игру!"
+  wrong-password: "§c[Auth] Неверный пароль!"
+  already-logged: "§c[Auth] Ты уже авторизован!"
+  usage-reg: "§cИспользование: /reg <пароль> <пароль>"
+  usage-login: "§cИспользование: /login <пароль>"
