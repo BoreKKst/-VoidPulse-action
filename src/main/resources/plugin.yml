@@ -7,5 +7,9 @@ commands:
   login:
   l:
   setspawn:
-    description: Установить временный спаун для авторизации
+    description: Установить спаун авторизации
+    permission: voidpulse.admin
+  voidpulseauth:
+    description: Управление плагином VoidPulse
+    aliases: [vpa]
     permission: voidpulse.admin
