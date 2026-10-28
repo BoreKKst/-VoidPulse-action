@@ -29,18 +29,27 @@ import java.util.Set;
 public final class Main extends JavaPlugin implements Listener, CommandExecutor {
 
     private final Set<Player> loggedIn = new HashSet<>();
+    private File accountsDir;
+    private File configFile;
 
     @Override
     public void onEnable() {
+        // 1. Создаем корневую папку плагина
         if (!getDataFolder().exists()) {
-            getDataFolder().mkdir();
+            getDataFolder().mkdirs();
         }
-        File accountsDir = new File(getDataFolder(), "accounts");
+        
+        // 2. Создаем подпапку accounts для юзеров
+        accountsDir = new File(getDataFolder(), "accounts");
         if (!accountsDir.exists()) {
-            accountsDir.mkdir();
+            accountsDir.mkdirs();
         }
 
-        saveDefaultConfig();
+        // 3. Создаем стандартный config.yml внутри папки плагина, если его нет
+        configFile = new File(getDataFolder(), "config.yml");
+        if (!configFile.exists()) {
+            saveDefaultConfig();
+        }
 
         getServer().getPluginManager().registerEvents(this, this);
         if (getCommand("register") != null) getCommand("register").setExecutor(this);
@@ -48,7 +57,7 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
         if (getCommand("login") != null) getCommand("login").setExecutor(this);
         if (getCommand("l") != null) getCommand("l").setExecutor(this);
 
-        getLogger().info("VoidPulse Auth с командами /reg и /l успешно запущен!");
+        getLogger().info("VoidPulse Auth успешно запущен: папки и конфиги созданы!");
     }
 
     @Override
@@ -60,7 +69,7 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
-        File playerFile = new File(getDataFolder(), "accounts/" + player.getName().toLowerCase() + ".yml");
+        File playerFile = new File(accountsDir, player.getName().toLowerCase() + ".yml");
         
         player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 99999, 0, false, false));
 
@@ -97,7 +106,7 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
         }
 
         Player player = (Player) sender;
-        File playerFile = new File(getDataFolder(), "accounts/" + player.getName().toLowerCase() + ".yml");
+        File playerFile = new File(accountsDir, player.getName().toLowerCase() + ".yml");
         String cmd = command.getName().toLowerCase();
 
         if (cmd.equals("register") || cmd.equals("reg")) {
@@ -114,6 +123,10 @@ public final class Main extends JavaPlugin implements Listener, CommandExecutor 
             String passwordHash = hashPassword(password);
 
             try {
+                if (!accountsDir.exists()) {
+                    accountsDir.mkdirs();
+                }
+                
                 playerFile.createNewFile();
                 FileConfiguration config = YamlConfiguration.loadConfiguration(playerFile);
                 config.set("name", player.getName());
