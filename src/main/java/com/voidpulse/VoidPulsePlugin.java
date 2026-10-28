@@ -2,22 +2,21 @@ package com.voidpulse;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.*;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.MapMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -26,40 +25,20 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
-    private String apiUrl;
-    private String secretKey;
-    private String inviteLink;
-
-    // Хранение локальных данных ожидания верификации: Ник -> {code, sessionId}
-    private final Map<String, PendingVerification> pendingVerifications = new ConcurrentHashMap<>();
-    
-    // Список игроков, которые прошли Discord, но еще не ввели /login или /reg
+    private final Map<UUID, String> pendingCaptcha = new ConcurrentHashMap<>();
     private final Set<UUID> unauthenticatedPlayers = ConcurrentHashMap.newKeySet();
-
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_2)
-            .build();
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
-        loadConfigValues();
 
-        // Создаем папку для аккаунтов
         File accountsDir = new File(getDataFolder(), "accounts");
         if (!accountsDir.exists()) {
             accountsDir.mkdirs();
         }
 
         getServer().getPluginManager().registerEvents(this, this);
-        getLogger().info("§a[VoidPulse] Плагин авторизации и интеграции с Discord успешно запущен!");
-    }
-
-    private void loadConfigValues() {
-        FileConfiguration config = getConfig();
-        apiUrl = config.getString("discord.api-url", "https://your-bot.onrender.com");
-        secretKey = config.getString("discord.secret-key", "DEFAULT_KEY");
-        inviteLink = config.getString("discord.invite-link", "discord.gg/voidpulse");
+        getLogger().info("§a[VoidPulse] Автономный плагин авторизации с капчей успешно запущен!");
     }
 
     @Override
@@ -67,68 +46,87 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         getLogger().info("§c[VoidPulse] Плагин выключен.");
     }
 
-    // --- ЛОГИКА ВХОДА И ПРОВЕРКИ ДИСКОРДА ---
+    // --- ВХОД И ВЫДАЧА КАРТЫ-КАПЧИ ---
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
-        String nick = player.getName();
         UUID uuid = player.getUniqueId();
 
-        // Накладываем слепоту при входе, пока не авторизуется
-        player.addPotionEffect(newPotionEffect(PotionEffectType.BLINDNESS, 999999, 1, false, false));
+        unauthenticatedPlayers.add(uuid);
+        player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, 999999, 1, false, false));
 
-        // Проверяем через API бота на Render, подтвердил ли игрок код в ДС
-        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
-            PendingVerification pending = pendingVerifications.get(nick.toLowerCase());
+        // Генерируем код капчи
+        String captchaCode = generateRandomCode();
+        pendingCaptcha.put(uuid, captchaCode);
 
-            if (pending != null) {
-                // Игрок уже получал код, проверяем статус у бота (/api/check)
-                boolean approved = checkApiStatus(nick, pending.code, pending.sessionId);
-                if (approved) {
-                    // Дискорд пройден! Удаляем из ожидания и пускаем на этап пароля
-                    pendingVerifications.remove(nick.toLowerCase());
-                    unauthenticatedPlayers.add(uuid);
-                    
-                    Bukkit.getScheduler().runTask(this, () -> {
-                        player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                                getConfig().getString("messages.not-logged-in", "&cАвторизуйтесь через /login или /reg")));
-                    });
-                    return;
-                }
-            }
+        // Создаем карту в руку с кодом
+        ItemStack mapItem = new ItemStack(Material.FILLED_MAP);
+        MapMeta meta = (MapMeta) mapItem.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(ChatColor.translateAlternateColorCodes('&', "&b&lVOIDPULSE CAPTCHA"));
+            meta.setLore(Arrays.asList(
+                    ChatColor.translateAlternateColorCodes('&', "&7Код подтверждения: &e&l" + captchaCode),
+                    ChatColor.translateAlternateColorCodes('&', "&7Введите этот код в чат!")
+            ));
+            mapItem.setItemMeta(meta);
+        }
 
-            // Если не подтвержден или сессия новая — генерируем новый код и кикаем
-            String code = generateRandomCode();
-            String sessionId = UUID.randomUUID().toString();
-
-            pendingVerifications.put(nick.toLowerCase(), new PendingVerification(code, sessionId));
-
-            // Отправляем запрос боту на регистрацию сессии (/api/register)
-            sendRegisterApi(nick, code, sessionId);
-
-            // Формируем текст кика
-            String kickMsg = getConfig().getString("messages.kick-verification", "")
-                    .replace("{invite}", inviteLink)
-                    .replace("{code}", code);
-
-            Bukkit.getScheduler().runTask(this, () -> {
-                player.kickPlayer(ChatColor.translateAlternateColorCodes('&', kickMsg));
-            });
-        });
+        player.getInventory().setItemInMainHand(mapItem);
+        player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
+                "&c[VoidPulse] В вашей руке карта с кодом капчи. Напишите его в чат!"));
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        unauthenticatedPlayers.remove(event.getPlayer().getUniqueId());
+        UUID uuid = event.getPlayer().getUniqueId();
+        unauthenticatedPlayers.remove(uuid);
+        pendingCaptcha.remove(uuid);
     }
 
-    // --- БЛОКИРОВКА ДЕЙСТВИЙ ДО АВТОРИЗАЦИИ ---
+    // --- ПРОВЕРКА КАПЧИ И ЧАТА ---
+
+    @EventHandler
+    public void onChat(AsyncPlayerChatEvent event) {
+        Player player = event.getPlayer();
+        UUID uuid = player.getUniqueId();
+
+        if (unauthenticatedPlayers.contains(uuid)) {
+            event.setCancelled(true);
+
+            if (pendingCaptcha.containsKey(uuid)) {
+                String inputCode = event.getMessage().trim().toUpperCase();
+                String correctCode = pendingCaptcha.get(uuid);
+
+                if (inputCode.equals(correctCode)) {
+                    pendingCaptcha.remove(uuid);
+                    
+                    Bukkit.getScheduler().runTask(this, () -> {
+                        player.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
+                        File accountFile = new File(getDataFolder(), "accounts/" + player.getName().toLowerCase() + ".yml");
+                        
+                        if (accountFile.exists()) {
+                            player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
+                                    "&a✅ Капча пройдена! Введите &e/login <пароль>"));
+                        } else {
+                            player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
+                                    "&a✅ Капча пройдена! Введите &e/reg <пароль>"));
+                        }
+                    });
+                } else {
+                    player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
+                            "&c❌ Неверный код капчи! Посмотрите на карту в руке."));
+                }
+                return;
+            }
+
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала авторизуйтесь через /login или /reg!"));
+        }
+    }
 
     @EventHandler
     public void onPlayerMove(PlayerMoveEvent event) {
         if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
-            // Запрещаем ходить, пока не введет пароль
             if (event.getFrom().getX() != event.getTo().getX() || event.getFrom().getZ() != event.getTo().getZ()) {
                 event.setTo(event.getFrom());
             }
@@ -140,35 +138,30 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         if (unauthenticatedPlayers.contains(player.getUniqueId())) {
             String msg = event.getMessage().toLowerCase();
-            // Разрешаем только команды авторизации
             if (!msg.startsWith("/reg") && !msg.startsWith("/login") && !msg.startsWith("/l ")) {
                 event.setCancelled(true);
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                        getConfig().getString("messages.not-logged-in", "&cСначала авторизуйтесь!")));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала пройдите капчу и авторизуйтесь!"));
             }
         }
     }
 
-    @EventHandler
-    public void onChat(AsyncPlayerChatEvent event) {
-        if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-            event.getPlayer().sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                    getConfig().getString("messages.not-logged-in", "&cСначала авторизуйтесь!")));
-        }
-    }
-
-    // --- КОМАНДЫ РЕГИСТРАЦИИ И ВХОДА (/reg, /login) ---
+    // --- КОМАНДЫ РЕГИСТРАЦИИ И ВХОДА ---
 
     @Override
     public boolean onCommand(org.bukkit.command.CommandSender sender, org.bukkit.command.Command command, String label, String[] args) {
         if (!(sender instanceof Player)) return true;
         Player player = (Player) sender;
+        UUID uuid = player.getUniqueId();
         String name = player.getName().toLowerCase();
         File accountFile = new File(getDataFolder(), "accounts/" + name + ".yml");
 
+        if (pendingCaptcha.containsKey(uuid)) {
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cСначала введите код с карты в чат!"));
+            return true;
+        }
+
         if (command.getName().equalsIgnoreCase("reg")) {
-            if (!unauthenticatedPlayers.contains(player.getUniqueId())) {
+            if (!unauthenticatedPlayers.contains(uuid)) {
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cВы уже вошли в систему!"));
                 return true;
             }
@@ -177,14 +170,11 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
                 return true;
             }
             if (args.length < 1) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages.usage-reg", "&c/reg <пароль>")));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cИспользование: /reg <пароль>"));
                 return true;
             }
 
-            String password = args[0];
-            String hash = hashPassword(password);
-
-            // Сохраняем файл аккаунта
+            String hash = hashPassword(args[0]);
             FileConfiguration accConfig = YamlConfiguration.loadConfiguration(accountFile);
             accConfig.set("password", hash);
             accConfig.set("ip", player.getAddress().getAddress().getHostAddress());
@@ -194,14 +184,13 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
                 e.printStackTrace();
             }
 
-            // Успех авторизации
             authenticatePlayer(player);
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages.register-success", "&aУспешная регистрация!")));
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🎉 Успешная регистрация и вход!"));
             return true;
         }
 
         if (command.getName().equalsIgnoreCase("login") || command.getName().equalsIgnoreCase("l")) {
-            if (!unauthenticatedPlayers.contains(player.getUniqueId())) {
+            if (!unauthenticatedPlayers.contains(uuid)) {
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cВы уже вошли!"));
                 return true;
             }
@@ -210,7 +199,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
                 return true;
             }
             if (args.length < 1) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages.usage-login", "&c/login <пароль>")));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cИспользование: /login <пароль>"));
                 return true;
             }
 
@@ -219,9 +208,9 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
             if (hashPassword(args[0]).equals(savedHash)) {
                 authenticatePlayer(player);
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages.login-success", "&aУспешный вход!")));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&a🔓 Успешный вход в игру!"));
             } else {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages.wrong-password", "&cНеверный пароль!")));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&c❌ Неверный пароль!"));
             }
             return true;
         }
@@ -231,57 +220,15 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
     private void authenticatePlayer(Player player) {
         unauthenticatedPlayers.remove(player.getUniqueId());
+        // Гарантированно снимаем эффект слепоты и возвращаем нормальное зрение
         player.removePotionEffect(PotionEffectType.BLINDNESS);
     }
-
-    // --- HTTP СЕТЕВЫЕ ЗАПРОСЫ К RENDER-БОТУ ---
-
-    private void sendRegisterApi(String nick, String code, String sessionId) {
-        try {
-            String json = String.format("{\"secret_key\":\"%s\",\"mc_nick\":\"%s\",\"code\":\"%s\",\"session_id\":\"%s\"}",
-                    secretKey, nick, code, sessionId);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiUrl + "/api/register"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(json))
-                    .build();
-
-            httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        } catch (Exception e) {
-            getLogger().warning("[API ERROR] Не удалось отправить сессию на Render: " + e.getMessage());
-        }
-    }
-
-    private boolean checkApiStatus(String nick, String code, String sessionId) {
-        try {
-            String json = String.format("{\"secret_key\":\"%s\",\"mc_nick\":\"%s\",\"code\":\"%s\",\"session_id\":\"%s\"}",
-                    secretKey, nick, code, sessionId);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiUrl + "/api/check"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(json))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            String body = response.body();
-
-            // Проверяем JSON-ответ на "APPROVED":true
-            return body.contains("\"success\":true") && body.contains("\"code\":\"APPROVED\"");
-        } catch (Exception e) {
-            getLogger().warning("[API ERROR] Ошибка проверки статуса на Render: " + e.getMessage());
-            return false;
-        }
-    }
-
-    // --- ВСПОМОГАТЕЛЬНЫЕ УТИЛИТЫ ---
 
     private String generateRandomCode() {
         String chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
         StringBuilder sb = new StringBuilder();
         Random random = new Random();
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 5; i++) {
             sb.append(chars.charAt(random.nextInt(chars.length())));
         }
         return sb.toString();
@@ -299,21 +246,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             }
             return hexString.toString();
         } catch (NoSuchAlgorithmException e) {
-            return password; // fallback
-        }
-    }
-
-    private PotionEffect newPotionEffect(PotionEffectType type, int duration, int amplifier, boolean ambient, boolean particles) {
-        return new PotionEffect(type, duration, amplifier, ambient, particles);
-    }
-
-    private static class PendingVerification {
-        String code;
-        String sessionId;
-
-        public PendingVerification(String code, String sessionId) {
-            this.code = code;
-            this.sessionId = sessionId;
+            return password;
         }
     }
 }
