@@ -100,7 +100,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
         player.getInventory().setItemInMainHand(mapItem);
         player.sendMessage(ChatColor.translateAlternateColorCodes('&', 
-                "&c[VoidPulse] Посмотрите на карту в руке и введите код в чаت!"));
+                "&c[VoidPulse] Посмотрите на карту в руке и введите код в чат!"));
     }
 
     @EventHandler
@@ -157,7 +157,6 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
         if (unauthenticatedPlayers.contains(event.getPlayer().getUniqueId())) {
-            // Разрешаем держать карту в руке, но запрещаем взаимодействовать с миром (сундуки, двери и т.д.)
             event.setCancelled(true);
         }
     }
@@ -298,7 +297,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
             }
 
             FileConfiguration accConfig = YamlConfiguration.loadConfiguration(accountFile);
-            String savedHash = accConfig.getString("password", "", true);
+            String savedHash = accConfig.getString("password", ""); // <-- ИСПРАВЛЕНО ЗДЕСЬ (убран лишний параметр true)
 
             if (hashPassword(args[0]).equals(savedHash)) {
                 unauthenticatedPlayers.remove(uuid);
@@ -348,6 +347,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
         return player.getWorld().getSpawnLocation();
     }
 
+    (ommited hash methods...) // Оставляем хэширование и генерацию кода на месте
     private String generateRandomCode() {
         String chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
         StringBuilder sb = new StringBuilder();
