@@ -163,7 +163,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
     @Override
     public boolean onCommand(org.bukkit.command.CommandSender sender, org.bukkit.command.Command command, String label, String[] args) {
         if (!(sender instanceof Player)) return true;
-        Player player = (Player);
+        Player player = (Player) sender; // <--- Вот здесь было исправлено!
         String name = player.getName().toLowerCase();
         File accountFile = new File(getDataFolder(), "accounts/" + name + ".yml");
 
@@ -202,7 +202,7 @@ public final class VoidPulsePlugin extends JavaPlugin implements Listener {
 
         if (command.getName().equalsIgnoreCase("login") || command.getName().equalsIgnoreCase("l")) {
             if (!unauthenticatedPlayers.contains(player.getUniqueId())) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString("messages.already-logged", "&cВы уже вошли!")));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cВы уже вошли!")));
                 return true;
             }
             if (!accountFile.exists()) {
